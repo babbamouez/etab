@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>محول Excel إلى جدول ويب</title>
+    <!-- استيراد Tailwind CSS للتصميم -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- استيراد مكتبة SheetJS لقراءة ملفات Excel -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        /* إضافة خط عربي جميل */
+        @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700&display=swap');
+        
+        body {
+            font-family: 'Cairo', sans-serif;
+            background-color: #f3f4f6; /* bg-gray-100 */
+        }
+
+        /* تحسين مظهر الجدول */
+        .table-container {
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        th {
+            position: sticky;
+            top: 0;
+            background-color: #f9fafb; /* bg-gray-50 */
+            z-index: 10;
+        }
+
+        /* تأثير التحميل */
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3b82f6; /* blue-500 */
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="text-gray-800 p-4 md:p-8">
+
+    <div class="max-w-6xl mx-auto">
+        <!-- قسم العنوان -->
+        <header class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-blue-600 mb-2">عارض بيانات Excel</h1>
+            <p class="text-gray-600">قم برفع ملف Excel الخاص بك لعرض البيانات بشكل ديناميكي</p>
+        </header>
+
+        <!-- منطقة رفع الملف -->
+        <div class="bg-white rounded-xl shadow-md p-6 mb-8 text-center border-2 border-dashed border-gray-300 hover:border-blue-400 transition-colors" id="drop-zone">
+            <div class="mb-4">
+                <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+            </div>
+            <label for="excel-file" class="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-lg transition-colors inline-block mb-2">
+                اختر ملف Excel
+            </label>
+            <input type="file" id="excel-file" accept=".xlsx, .xls, .csv" class="hidden">
+            <p class="text-sm text-gray-500">أو قم بسحب وإفلات الملف هنا</p>
+            <p class="text-xs text-gray-400 mt-2">الصيغ المدعومة: .xlsx, .xls, .csv</p>
+            
+            <!-- مؤشر التحميل -->
+            <div id="loading-indicator" class="hidden justify-center items-center mt-4">
+                <div class="loader mr-3"></div>
+                <span class="text-blue-600 font-medium">جاري معالجة الملف...</span>
+            </div>
+        </div>
+
+        <!-- أشرطة التبويب لأوراق العمل (Sheets) -->
+        <div id="tabs-container" class="hidden mb-4 flex flex-wrap gap-2 border-b border-gray-200 pb-2">
+            <!-- سيتم إضافة التبويبات هنا ديناميكياً -->
+        </div>
+
+        <!-- أدوات البحث والتحكم -->
+        <div id="controls-container" class="hidden mb-4 flex flex-col sm:flex-row justify-between items-center gap-4">
+            <div class="relative w-full sm:w-64">
+                <input type="text" id="search-input" placeholder="ابحث في البيانات..." class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                </div>
+            </div>
+            <div class="text-sm text-gray-600">
+                إجمالي الصفوف: <span id="row-count" class="font-semibold">0</span>
+            </div>
+        </div>
+
+        <!-- رسالة الخطأ -->
+        <div id="error-message" class="hidden bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-8 rounded" role="alert">
+            <p class="font-bold">حدث خطأ</p>
+            <p id="error-text">تعذر قراءة الملف. تأكد من أنه ملف Excel صالح.</p>
+        </div>
+
+        <!-- منطقة عرض الجدول -->
+        <div id="table-wrapper" class="hidden bg-white rounded-xl shadow-md overflow-hidden">
+            <div class="table-container w-full overflow-x-auto">
+                <table id="data-table" class="min-w-full text-sm text-right">
+                    <thead id="table-head" class="text-xs text-gray-700 uppercase bg-gray-50 border-b">
+                        <!-- ترويسة الجدول ستضاف هنا -->
+                    </thead>
+                    <tbody id="table-body" class="divide-y divide-gray-200">
+                        <!-- بيانات الجدول ستضاف هنا -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- حالة عدم وجود بيانات بعد البحث -->
+        <div id="no-results" class="hidden bg-white rounded-xl shadow-md p-8 text-center text-gray-500">
+            لا توجد نتائج مطابقة لبحثك.
+        </div>
+
+    </div>
+
+<script>
+    // المتغيرات العامة لتخزين حالة التطبيق
+    let workbookData = null; // لتخزين كائن Excel بالكامل
+    let currentSheetName = ""; // اسم الورقة النشطة حالياً
+    let currentData = []; // البيانات المعروضة حالياً (كأوبجكتات)
+    let headers = []; // أسماء الأعمدة
+
+    // عناصر DOM
+    const fileInput = document.getElementById('excel-file');
+    const dropZone = document.getElementById('drop-zone');
+    const loadingIndicator = document.getElementById('loading-indicator');
+    const errorMessage = document.getElementById('error-message');
+    const errorText = document.getElementById('error-text');
+    const tableWrapper = document.getElementById('table-wrapper');
+    const tableHead = document.getElementById('table-head');
+    const tableBody = document.getElementById('table-body');
+    const tabsContainer = document.getElementById('tabs-container');
+    const controlsContainer = document.getElementById('controls-container');
+    const searchInput = document.getElementById('search-input');
+    const rowCountSpan = document.getElementById('row-count');
+    const noResultsMsg = document.getElementById('no-results');
+
+    // محاولة تحميل ملف افتراضي عند فتح الصفحة
+    document.addEventListener('DOMContentLoaded', loadDefaultExcelFile);
+
+    async function loadDefaultExcelFile() {
+        try {
+            showLoading();
+            // يبحث عن ملف باسم data.xlsx في نفس المجلد
+            const response = await fetch('data.xlsx');
+            if (!response.ok) {
+                throw new Error('لم يتم العثور على الملف الافتراضي');
+            }
+            const arrayBuffer = await response.arrayBuffer();
+            const data = new Uint8Array(arrayBuffer);
+            const workbook = XLSX.read(data, { type: 'array' });
+            
+            // إخفاء منطقة الرفع لأن الملف تم تحميله بنجاح
+            dropZone.classList.add('hidden');
+            document.querySelector('header p').textContent = "عرض البيانات المباشرة";
+
+            workbookData = workbook;
+            setupTabs(workbook.SheetNames);
+            if (workbook.SheetNames.length > 0) {
+                loadSheet(workbook.SheetNames[0]);
+            }
+        } catch (error) {
+            console.log("لم يتم العثور على ملف data.xlsx، سيتم إظهار واجهة الرفع.");
+        } finally {
+            hideLoading();
+        }
+    }
+
+    // إعداد مستمعات الأحداث لرفع الملف
+    fileInput.addEventListener('change', handleFileSelect);
+
+    // إعداد مستمعات أحداث السحب والإفلات
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('border-blue-500', 'bg-blue-50');
+    });
+
+    dropZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('border-blue-500', 'bg-blue-50');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('border-blue-500', 'bg-blue-50');
+        
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            const file = e.dataTransfer.files[0];
+            processFile(file);
+        }
+    });
+
+    // مستمع حدث البحث
+    searchInput.addEventListener('input', (e) => {
+        filterData(e.target.value);
+    });
+
+    // دالة التعامل مع اختيار الملف من الزر
+    function handleFileSelect(e) {
+        const file = e.target.files[0];
+        if (file) {
+            processFile(file);
+        }
+    }
+
+    // الدالة الرئيسية لمعالجة ملف Excel
+    function processFile(file) {
+        // التحقق من نوع الملف بشكل مبدئي
+        const validExtensions = ['.xlsx', '.xls', '.csv'];
+        const fileExtension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+        
+        if (!validExtensions.includes(fileExtension)) {
+            showError("الرجاء اختيار ملف Excel صالح (.xlsx, .xls, .csv)");
+            return;
+        }
+
+        // إظهار التحميل وإخفاء العناصر الأخرى
+        hideError();
+        showLoading();
+        tableWrapper.classList.add('hidden');
+        tabsContainer.classList.add('hidden');
+        controlsContainer.classList.add('hidden');
+        noResultsMsg.classList.add('hidden');
+
+        const reader = new FileReader();
+
+        reader.onload = function(e) {
+            try {
+                const data = new Uint8Array(e.target.result);
+                // قراءة ملف Excel باستخدام SheetJS
+                const workbook = XLSX.read(data, { type: 'array' });
+                workbookData = workbook;
+                
+                // إعداد التبويبات لأوراق العمل
+                setupTabs(workbook.SheetNames);
+                
+                // عرض الورقة الأولى افتراضياً
+                if (workbook.SheetNames.length > 0) {
+                    loadSheet(workbook.SheetNames[0]);
+                }
+            } catch (error) {
+                console.error("Error reading file:", error);
+                showError("حدث خطأ أثناء قراءة الملف. قد يكون الملف تالفاً أو بتنسيق غير مدعوم.");
+            } finally {
+                hideLoading();
+            }
+        };
+
+        reader.onerror = function() {
+            showError("حدث خطأ أثناء تحميل الملف.");
+            hideLoading();
+        };
+
+        // قراءة الملف كمصفوفة بايتات
+        reader.readAsArrayBuffer(file);
+    }
+
+    // دالة إنشاء تبويبات لأوراق العمل
+    function setupTabs(sheetNames) {
+        tabsContainer.innerHTML = ''; // مسح التبويبات القديمة
+        
+        if (sheetNames.length <= 1) {
+            tabsContainer.classList.add('hidden'); // لا حاجة للتبويبات إذا كانت ورقة واحدة
+            return;
+        }
+
+        tabsContainer.classList.remove('hidden');
+        tabsContainer.classList.add('flex');
+
+        sheetNames.forEach(sheetName => {
+            const btn = document.createElement('button');
+            btn.textContent = sheetName;
+            btn.className = 'px-4 py-2 text-sm font-medium rounded-t-lg focus:outline-none transition-colors border-b-2 border-transparent hover:text-blue-600 hover:border-gray-300';
+            
+            btn.onclick = () => {
+                // تحديث النمط للتبويب النشط
+                document.querySelectorAll('#tabs-container button').forEach(b => {
+                    b.classList.remove('text-blue-600', 'border-blue-600', 'bg-white');
+                    b.classList.add('text-gray-500', 'border-transparent');
+                });
+                btn.classList.remove('text-gray-500', 'border-transparent');
+                btn.classList.add('text-blue-600', 'border-blue-600', 'bg-white');
+                
+                loadSheet(sheetName);
+            };
+            
+            tabsContainer.appendChild(btn);
+        });
+
+        // تنشيط التبويب الأول
+        if (tabsContainer.firstChild) {
+            tabsContainer.firstChild.classList.remove('text-gray-500', 'border-transparent');
+            tabsContainer.firstChild.classList.add('text-blue-600', 'border-blue-600', 'bg-white');
+        }
+    }
+
+    // دالة تحميل بيانات ورقة عمل محددة
+    function loadSheet(sheetName) {
+        currentSheetName = sheetName;
+        const worksheet = workbookData.Sheets[sheetName];
+        
+        // تحويل الورقة إلى مصفوفة من الكائنات (JSON)
+        // defval: "" يضمن أن الخلايا الفارغة تظهر كسلاسل فارغة وليس undefined
+        const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+        
+        if (rawData.length === 0) {
+            showError("ورقة العمل هذه فارغة.");
+            tableWrapper.classList.add('hidden');
+            controlsContainer.classList.add('hidden');
+            return;
+        }
+
+        // استخراج الترويسة (الصف الأول)
+        headers = rawData[0];
+        
+        // استخراج البيانات وتحويلها إلى كائنات لسهولة البحث
+        currentData = [];
+        for (let i = 1; i < rawData.length; i++) {
+            const row = rawData[i];
+            // تخطي الصفوف الفارغة تماماً
+            if (row.some(cell => cell !== "")) {
+                let rowObj = {};
+                headers.forEach((header, index) => {
+                    rowObj[header] = row[index];
+                });
+                currentData.push(rowObj);
+            }
+        }
+
+        searchInput.value = ''; // إعادة ضبط البحث
+        renderTable(currentData);
+        controlsContainer.classList.remove('hidden');
+        controlsContainer.classList.add('flex');
+    }
+
+    // دالة رسم الجدول بالبيانات المعطاة
+    function renderTable(dataToRender) {
+        // مسح الجدول الحالي
+        tableHead.innerHTML = '';
+        tableBody.innerHTML = '';
+
+        if (dataToRender.length === 0) {
+            tableWrapper.classList.add('hidden');
+            noResultsMsg.classList.remove('hidden');
+            rowCountSpan.textContent = '0';
+            return;
+        }
+
+        noResultsMsg.classList.add('hidden');
+        tableWrapper.classList.remove('hidden');
+
+        // بناء الترويسة
+        const headerRow = document.createElement('tr');
+        headers.forEach(headerText => {
+            const th = document.createElement('th');
+            th.className = 'px-6 py-3 font-semibold tracking-wider text-right border-b border-gray-200';
+            th.textContent = headerText || 'بدون اسم';
+            headerRow.appendChild(th);
+        });
+        tableHead.appendChild(headerRow);
+
+        // بناء صفوف البيانات
+        // استخدام DocumentFragment لتحسين الأداء عند عرض آلاف الصفوف
+        const fragment = document.createDocumentFragment();
+        
+        dataToRender.forEach((rowObj, index) => {
+            const tr = document.createElement('tr');
+            tr.className = index % 2 === 0 ? 'bg-white hover:bg-gray-50' : 'bg-gray-50 hover:bg-gray-100';
+            tr.classList.add('transition-colors');
+
+            headers.forEach(header => {
+                const td = document.createElement('td');
+                td.className = 'px-6 py-4 whitespace-nowrap text-gray-700 border-b border-gray-100';
+                // تنسيق الخلايا الفارغة
+                let cellValue = rowObj[header];
+                if (cellValue === undefined || cellValue === null || cellValue === "") {
+                    td.innerHTML = '<span class="text-gray-300">-</span>';
+                } else {
+                    td.textContent = cellValue;
+                }
+                tr.appendChild(td);
+            });
+            fragment.appendChild(tr);
+        });
+
+        tableBody.appendChild(fragment);
+        rowCountSpan.textContent = dataToRender.length.toLocaleString('ar-EG');
+    }
+
+    // دالة البحث وتصفية البيانات
+    function filterData(searchTerm) {
+        if (!searchTerm) {
+            renderTable(currentData);
+            return;
+        }
+
+        const lowerCaseTerm = searchTerm.toLowerCase();
+        
+        const filteredData = currentData.filter(row => {
+            // البحث في كل قيم الصف
+            return Object.values(row).some(value => {
+                if (value === null || value === undefined) return false;
+                // تحويل القيمة إلى نص والبحث
+                return String(value).toLowerCase().includes(lowerCaseTerm);
+            });
+        });
+
+        renderTable(filteredData);
+    }
+
+    // دوال مساعدة للواجهة
+    function showLoading() {
+        loadingIndicator.classList.remove('hidden');
+        loadingIndicator.classList.add('flex');
+        document.body.style.cursor = 'wait';
+    }
+
+    function hideLoading() {
+        loadingIndicator.classList.add('hidden');
+        loadingIndicator.classList.remove('flex');
+        document.body.style.cursor = 'default';
+    }
+
+    function showError(message) {
+        errorText.textContent = message;
+        errorMessage.classList.remove('hidden');
+    }
+
+    function hideError() {
+        errorMessage.classList.add('hidden');
+    }
+</script>
+</body>
+</html>
